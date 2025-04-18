@@ -2,61 +2,62 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
-	"github.com/shamanskiy/go-orchestrator/manager"
-	"github.com/shamanskiy/go-orchestrator/node"
-	"github.com/shamanskiy/go-orchestrator/task"
-	"github.com/shamanskiy/go-orchestrator/worker"
+	"github.com/shamanskiy/go-orchestrator/managers"
+	"github.com/shamanskiy/go-orchestrator/nodes"
+	"github.com/shamanskiy/go-orchestrator/tasks"
+	"github.com/shamanskiy/go-orchestrator/workers"
 )
 
 func main() {
-	t := task.Task{
+	task := tasks.Task{
 		ID:     uuid.New(),
 		Name:   "Task-1",
-		State:  task.Pending,
+		State:  tasks.Pending,
 		Image:  "Image-1",
 		Memory: 1024,
 		Disk:   1}
 
-	te := task.TaskEvent{
+	taskEvent := tasks.TaskEvent{
 		ID:        uuid.New(),
-		State:     task.Pending,
+		State:     tasks.Pending,
 		Timestamp: time.Now(),
-		Task:      t,
+		Task:      task,
 	}
-	fmt.Printf("task: %v\n", t)
-	fmt.Printf("task event: %v\n", te)
+	fmt.Printf("task: %v\n", task)
+	fmt.Printf("task event: %v\n", taskEvent)
 
-	w := worker.Worker{
+	worker := workers.Worker{
 		Name:  "worker-1",
 		Queue: *queue.New(),
-		Db:    make(map[uuid.UUID]*task.Task),
+		Db:    make(map[uuid.UUID]*tasks.Task),
 	}
 
-	fmt.Printf("worker: %v\n", w)
-	w.CollectStats()
-	w.RunTask()
-	w.StartTask()
-	w.StopTask()
+	fmt.Printf("worker: %v\n", worker)
+	worker.CollectStats()
+	worker.RunTask()
+	worker.StartTask()
+	worker.StopTask()
 
-	m := manager.Manager{
+	manager := managers.Manager{
 		Pending: *queue.New(),
-		TaskDb:  make(map[string][]task.Task),
-		EventDb: make(map[string][]task.TaskEvent),
-		Workers: []string{w.Name},
+		TaskDb:  make(map[string][]tasks.Task),
+		EventDb: make(map[string][]tasks.TaskEvent),
+		Workers: []string{worker.Name},
 	}
 
-	fmt.Printf("manager: %v\n", m)
-	m.SelectWorker()
-	m.UpdateTasks()
-	m.SendWork()
+	fmt.Printf("manager: %v\n", manager)
+	manager.SelectWorker()
+	manager.UpdateTasks()
+	manager.SendWork()
 
-	n := node.Node{
+	node := nodes.Node{
 		Name:   "Node-1",
 		Ip:     "192.168.1.1",
 		Cores:  4,
@@ -64,9 +65,8 @@ func main() {
 		Disk:   25,
 		Role:   "worker",
 	}
-	fmt.Printf("node: %v\n", n)
+	fmt.Printf("node: %v\n", node)
 
-	fmt.Printf("create a test container\n")
 	dockerTask, createResult := createContainer()
 	if createResult.Error != nil {
 		fmt.Printf("%v", createResult.Error)
@@ -75,17 +75,15 @@ func main() {
 
 	time.Sleep(time.Second * 5)
 
-	fmt.Printf("stopping container %s\n", createResult.ContainerId)
-	stopResult := stopContainer(dockerTask, createResult.ContainerId)
+	stopResult := removeContainer(dockerTask, createResult.ContainerId)
 	if stopResult.Error != nil {
 		fmt.Printf("%v", stopResult.Error)
 		os.Exit(1)
 	}
-	fmt.Printf("container %s has been stopped\n", createResult.ContainerId)
 }
 
-func createContainer() (*task.Docker, *task.DockerResult) {
-	taskConfig := task.Config{
+func createContainer() (*tasks.Docker, *tasks.DockerResult) {
+	taskConfig := tasks.Config{
 		Name:  "test-container-1",
 		Image: "postgres:13",
 		Env: []string{
@@ -93,13 +91,13 @@ func createContainer() (*task.Docker, *task.DockerResult) {
 			"POSTGRES_PASSWORD=secret",
 		}}
 
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	dockerClient, err := client.NewClientWithOpts(client.WithHost("unix:///Users/shamanskiy/.docker/run/docker.sock"))
 	if err != nil {
 		fmt.Printf("%v\n", err)
 		return nil, nil
 	}
 
-	docker := task.Docker{
+	docker := tasks.Docker{
 		Client: dockerClient,
 		Config: taskConfig}
 
@@ -109,19 +107,19 @@ func createContainer() (*task.Docker, *task.DockerResult) {
 		return nil, nil
 	}
 
-	fmt.Printf(
-		"Container %s is running with config %v\n", result.ContainerId, taskConfig)
+	log.Printf(
+		"Container %s is running with config %+v\n", result.ContainerId, taskConfig)
 	return &docker, &result
 }
 
-func stopContainer(docker *task.Docker, containerId string) *task.DockerResult {
-	result := docker.Stop(containerId)
+func removeContainer(docker *tasks.Docker, containerId string) *tasks.DockerResult {
+	result := docker.Remove(containerId)
 	if result.Error != nil {
-		fmt.Printf("%v\n", result.Error)
+		log.Printf("%v\n", result.Error)
 		return nil
 	}
 
-	fmt.Printf(
-		"Container %s has been stopped and removed\n", result.ContainerId)
+	log.Printf(
+		"Container %s has been stopped and removed\n", containerId)
 	return &result
 }
