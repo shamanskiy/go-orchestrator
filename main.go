@@ -2,46 +2,39 @@ package main
 
 import (
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/google/uuid"
-	"github.com/shamanskiy/go-orchestrator/queues"
+	"github.com/shamanskiy/go-orchestrator/common/queues"
 	"github.com/shamanskiy/go-orchestrator/tasks"
 	"github.com/shamanskiy/go-orchestrator/workers"
 )
 
 func main() {
-	worker := workers.Worker{
+	log.Println(uuid.New())
+
+	worker := newWorker()
+	go worker.ProcessTasksRequests(time.Second * 10)
+
+	workerApi := newWorkerApi(worker)
+	workerApi.Listen()
+}
+
+func newWorker() *workers.Worker {
+	return &workers.Worker{
 		TaskDb:           make(map[uuid.UUID]tasks.Task),
 		TaskRequestQueue: queues.New[tasks.TaskRequest](),
 		DockerClient:     newDockerClient(),
 	}
+}
 
-	taskRequest := tasks.TaskRequest{
-		ID:            uuid.New(),
-		Name:          "test-task-1",
-		Image:         "strm/helloworld-http",
-		RequiredState: tasks.Scheduled,
-	}
-	worker.SubmitTaskRequest(taskRequest)
-
-	processResult := worker.ProcessTaskRequest()
-	if processResult.Error != nil {
-		panic(processResult.Error)
-	}
-
-	sleepTime := time.Second * 3
-	log.Printf("sleeping for %+v seconds\n", sleepTime)
-	time.Sleep(sleepTime)
-
-	taskRequest.RequiredState = tasks.Completed
-	worker.SubmitTaskRequest(taskRequest)
-
-	processResult = worker.ProcessTaskRequest()
-	if processResult.Error != nil {
-		panic(processResult.Error)
-	}
+func newWorkerApi(worker *workers.Worker) *workers.API {
+	host := os.Getenv("CUBE_HOST")
+	port, _ := strconv.Atoi(os.Getenv("CUBE_PORT"))
+	return workers.NewAPI(host, port, worker)
 }
 
 func newDockerClient() *tasks.Docker {

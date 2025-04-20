@@ -1,0 +1,16 @@
+GET http://localhost:5555/tasks
+
+###
+
+POST http://localhost:5555/tasks
+Content-Type: application/json
+
+{
+  "id": "d4cbf203-841e-4eae-afde-73ec1a67cfa9",
+  "name": "test-task-1",
+  "image": "strm/helloworld-http"
+}
+
+###
+
+DELETE http://localhost:5555/tasks/d4cbf203-841e-4eae-afde-73ec1a67cfa9

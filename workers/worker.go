@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/shamanskiy/go-orchestrator/queues"
+	"github.com/shamanskiy/go-orchestrator/common/queues"
 	"github.com/shamanskiy/go-orchestrator/tasks"
 )
 
@@ -18,6 +18,14 @@ type Worker struct {
 	DockerClient *tasks.Docker
 }
 
+func (w *Worker) Tasks() []tasks.Task {
+	tasks := make([]tasks.Task, 0, len(w.TaskDb))
+	for _, task := range w.TaskDb {
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
 func (w *Worker) CollectStats() {
 	fmt.Println("I will collect stats")
 }
@@ -26,7 +34,22 @@ func (w *Worker) SubmitTaskRequest(request tasks.TaskRequest) {
 	w.TaskRequestQueue.Enqueue(request)
 }
 
-func (w *Worker) ProcessTaskRequest() tasks.DockerResult {
+func (w *Worker) ProcessTasksRequests(sleepTime time.Duration) {
+	for {
+		if !w.TaskRequestQueue.IsEmpty() {
+			result := w.processTaskRequest()
+			if result.Error != nil {
+				log.Printf("Error running task: %v\n", result.Error)
+			}
+		} else {
+			log.Printf("No task requests to process currently.\n")
+		}
+		log.Printf("Sleeping for %v\n", sleepTime)
+		time.Sleep(sleepTime)
+	}
+}
+
+func (w *Worker) processTaskRequest() tasks.DockerResult {
 	taskRequest, ok := w.TaskRequestQueue.Dequeue()
 	if !ok {
 		log.Println("no task requests to process")
@@ -52,20 +75,21 @@ func (w *Worker) startTask(request tasks.TaskRequest) tasks.DockerResult {
 	}
 
 	task = request.Task()
-	task.StartTime = time.Now().UTC()
+	task.Runtime.StartTime = time.Now().UTC()
 
 	result := w.DockerClient.Run(task.Config())
 	if result.Error != nil {
-		task.State = tasks.Failed
+		task.Runtime.State = tasks.Failed
 		w.TaskDb[task.ID] = task
 		return result
 	}
 
-	task.ContainerID = result.ContainerId
-	task.State = tasks.Running
+	task.Runtime.State = tasks.Running
+	task.Runtime.ContainerID = result.ContainerId
+	task.Runtime.Port = result.Port
 	w.TaskDb[task.ID] = task
 
-	log.Printf("task %s started as container %s", task.ID, task.ContainerID)
+	log.Printf("task %s started as container %s", task.ID, task.Runtime.ContainerID)
 	return result
 }
 
@@ -76,20 +100,20 @@ func (w *Worker) stopTask(taskId uuid.UUID) tasks.DockerResult {
 		return tasks.DockerResult{Error: err}
 	}
 
-	if task.State != tasks.Running {
-		err := fmt.Errorf("task %s is not running, current state: %v", task.ID, task.State)
+	if task.Runtime.State != tasks.Running {
+		err := fmt.Errorf("task %s is not running, current state: %v", task.ID, task.Runtime.State)
 		return tasks.DockerResult{Error: err}
 	}
 
-	result := w.DockerClient.Remove(task.ContainerID)
+	result := w.DockerClient.Remove(task.Runtime.ContainerID)
 	if result.Error != nil {
 		return result
 	}
 
-	task.FinishTime = time.Now().UTC()
-	task.State = tasks.Completed
+	task.Runtime.FinishTime = time.Now().UTC()
+	task.Runtime.State = tasks.Completed
 	w.TaskDb[task.ID] = task
-	log.Printf("task %s completed at %s", task.ID, task.FinishTime)
+	log.Printf("task %s completed successfully", task.ID)
 
 	return result
 }
