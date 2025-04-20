@@ -2,16 +2,19 @@ package tasks
 
 import (
 	"context"
+	"io"
 	"log"
 	"math"
 	"os"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"golang.org/x/exp/slices"
 )
 
 type State int
@@ -24,20 +27,52 @@ const (
 	Failed
 )
 
+var stateTransitionMap = map[State][]State{
+	Pending:   {Scheduled},
+	Scheduled: {Scheduled, Running, Failed},
+	Running:   {Running, Completed, Failed},
+	Completed: {},
+	Failed:    {},
+}
+
+func ValidStateTransition(src State, dst State) bool {
+	validDst := stateTransitionMap[src]
+	return slices.Contains(validDst, dst)
+}
+
 type Task struct {
 	ID    uuid.UUID
 	Name  string
-	State State
+	Image string
 
-	Image         string
-	Memory        int
-	Disk          int
-	ExposedPorts  nat.PortSet
-	PortBindings  map[string]string
-	RestartPolicy string
+	State       State
+	ContainerID string
 
 	StartTime  time.Time
 	FinishTime time.Time
+}
+
+type TaskRequest struct {
+	ID            uuid.UUID
+	Name          string
+	Image         string
+	RequiredState State
+}
+
+func (t TaskRequest) Task() Task {
+	return Task{
+		ID:    t.ID,
+		Name:  t.Name,
+		Image: t.Image,
+		State: t.RequiredState,
+	}
+}
+
+func (t Task) Config() Config {
+	return Config{
+		Name:  t.Name,
+		Image: t.Image,
+	}
 }
 
 type TaskEvent struct {
@@ -70,7 +105,6 @@ type Runtime struct {
 
 type Docker struct {
 	Client *client.Client
-	Config Config
 }
 
 type DockerResult struct {
@@ -80,27 +114,27 @@ type DockerResult struct {
 	Result      string
 }
 
-func (d *Docker) Run() DockerResult {
+func (d *Docker) Run(config Config) DockerResult {
 	ctx := context.Background()
-	// reader, err := d.Client.ImagePull(ctx, d.Config.Image, image.PullOptions{})
-	// if err != nil {
-	// 	log.Printf("Error pulling image %s: %v\n", d.Config.Image, err)
-	// 	return DockerResult{Error: err}
-	// }
-	// io.Copy(os.Stdout, reader)
+	reader, err := d.Client.ImagePull(ctx, config.Image, image.PullOptions{})
+	if err != nil {
+		log.Printf("Error pulling image %s: %v\n", config.Image, err)
+		return DockerResult{Error: err}
+	}
+	io.Copy(os.Stdout, reader)
 
 	restartPolicy := container.RestartPolicy{
-		Name: d.Config.RestartPolicy,
+		Name: config.RestartPolicy,
 	}
 	resources := container.Resources{
-		Memory:   d.Config.Memory,
-		NanoCPUs: int64(d.Config.Cpu * math.Pow(10, 9)),
+		Memory:   config.Memory,
+		NanoCPUs: int64(config.Cpu * math.Pow(10, 9)),
 	}
 	containerConfig := container.Config{
-		Image:        d.Config.Image,
+		Image:        config.Image,
 		Tty:          false,
-		Env:          d.Config.Env,
-		ExposedPorts: d.Config.ExposedPorts,
+		Env:          config.Env,
+		ExposedPorts: config.ExposedPorts,
 	}
 	hostConfig := container.HostConfig{
 		RestartPolicy:   restartPolicy,
@@ -108,9 +142,9 @@ func (d *Docker) Run() DockerResult {
 		PublishAllPorts: true,
 	}
 
-	createResponse, err := d.Client.ContainerCreate(ctx, &containerConfig, &hostConfig, nil, nil, d.Config.Name)
+	createResponse, err := d.Client.ContainerCreate(ctx, &containerConfig, &hostConfig, nil, nil, config.Name)
 	if err != nil {
-		log.Printf("Error creating container using image %s: %v\n", d.Config.Image, err)
+		log.Printf("Error creating container using image %s: %v\n", config.Image, err)
 		return DockerResult{Error: err}
 	}
 
@@ -119,8 +153,6 @@ func (d *Docker) Run() DockerResult {
 		log.Printf("Error starting container %s: %v\n", createResponse.ID, err)
 		return DockerResult{Error: err}
 	}
-
-	d.Config.Runtime.ContainerID = createResponse.ID
 
 	out, err := d.Client.ContainerLogs(ctx, createResponse.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {

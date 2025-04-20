@@ -3,13 +3,11 @@ package managers
 import (
 	"fmt"
 
-	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
 	"github.com/shamanskiy/go-orchestrator/tasks"
 )
 
 type Manager struct {
-	Pending       queue.Queue
 	TaskDb        map[string][]tasks.Task
 	EventDb       map[string][]tasks.TaskEvent
 	Workers       []string
